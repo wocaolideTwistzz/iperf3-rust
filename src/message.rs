@@ -86,10 +86,11 @@ pub struct Parameters {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamStats {
-    pub start: usize,
-    pub end: usize,
+    pub index: Option<usize>,
+    pub duration: u64, // ms
     pub bytes_transferred: usize,
-    pub retransmits: Option<usize>,
+    pub retransmits: Option<usize>, // tcp retransmits (Linux only)
+    pub cwnd: Option<usize>,        // tcp cwnd (Linux only)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
