@@ -33,8 +33,7 @@ pub enum ServerEnvelope {
 pub enum ServerMessage {
     /// Welcome message sent by the server to the client
     Welcome,
-
-    /// Send results to the client
+    SetState(State),
     SendResults(Vec<StreamStats>),
 }
 
@@ -86,12 +85,32 @@ pub struct Parameters {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamStats {
+    pub id: usize,
     pub index: Option<usize>,
     pub duration: u64, // ms
     pub bytes_transferred: usize,
     pub retransmits: Option<usize>, // tcp retransmits (Linux only)
     pub cwnd: Option<usize>,        // tcp cwnd (Linux only)
+    pub summary: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum State {}
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub enum State {
+    /// Parameters have been exchanged, but server is not ready yet to ask for data stream
+    /// connections.
+    Start,
+
+    /// Asks the client to establish the data stream connections.
+    CreateStreams {
+        cookie: String,
+    },
+
+    /// All connections are established, stream the data and measure.
+    Running,
+
+    /// We are asked to exchange the TestResults between server and client. Client will initiate this
+    /// exchange once it receives a transition into the state.
+    ExchangeResults,
+
+    DisplayResults,
+}

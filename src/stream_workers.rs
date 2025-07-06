@@ -68,7 +68,11 @@ impl StreamWorker {
             }
         );
 
-        let signal = self.receiver.recv().await?;
+        let signal = self
+            .receiver
+            .recv()
+            .await
+            .map_err(|e| Error::StreamWorkerError(e.into()))?;
         if !matches!(signal, WorkerMessage::StartLoad) {
             return Err(Error::WorkerTerminated);
         }
@@ -79,7 +83,7 @@ impl StreamWorker {
         let mut index = 0;
 
         let mut bytes_transferred = 0_usize;
-        let total_bytes_transferred = 0_usize;
+        let mut total_bytes_transferred = 0_usize;
         let mut total_retransmits = 0_usize;
         let mut total_cwnd = 0_usize;
 
@@ -90,7 +94,13 @@ impl StreamWorker {
                 break;
             }
 
-            match self.receiver.recv().now_or_never().transpose()? {
+            match self
+                .receiver
+                .recv()
+                .now_or_never()
+                .transpose()
+                .map_err(|e| Error::StreamWorkerError(e.into()))?
+            {
                 Some(WorkerMessage::Terminate) => break,
                 Some(WorkerMessage::StartLoad) => {
                     warn!("Unexpected StartLoad signal received!")
@@ -105,7 +115,7 @@ impl StreamWorker {
             };
 
             if let Ok(bytes_count) = timeout(Duration::from_millis(100), read_or_write).await {
-                let bytes_count = bytes_count?;
+                let bytes_count = bytes_count.map_err(|e| Error::StreamWorkerError(e.into()))?;
                 if bytes_count > 0 {
                     bytes_transferred += bytes_count;
                 } else {
@@ -123,11 +133,13 @@ impl StreamWorker {
             let current_duration = now.duration_since(current_interval_start);
             if current_duration >= interval {
                 let mut stats = StreamStats {
+                    id: self.id,
                     index: Some(index),
                     duration: current_duration.as_millis() as u64,
                     bytes_transferred,
                     retransmits: None,
                     cwnd: None,
+                    summary: false,
                 };
                 #[cfg(target_os = "linux")]
                 {
@@ -140,7 +152,11 @@ impl StreamWorker {
                     total_cwnd += tcp_info.tcpi_snd_cwnd as usize;
                 }
 
-                self.sender.send(stats).await?;
+                self.sender
+                    .send(stats)
+                    .await
+                    .map_err(|e| Error::StreamWorkerError(e.into()))?;
+                total_bytes_transferred += bytes_transferred;
                 index += 1;
             }
         }
@@ -148,15 +164,23 @@ impl StreamWorker {
         // Drain the sockets if we are receiving end, we need to do that to avoid failing the
         // sender stream that might still be sending data.
         if !self.is_sending {
-            while self.stream.read(&mut buffer).await? != 0 {}
+            while self
+                .stream
+                .read(&mut buffer)
+                .await
+                .map_err(|e| Error::StreamWorkerError(e.into()))?
+                != 0
+            {}
         }
 
         Ok(StreamStats {
+            id: self.id,
             index: None,
             duration: start_time.elapsed().as_millis() as u64,
             bytes_transferred: total_bytes_transferred,
             retransmits: Some(total_retransmits),
             cwnd: Some(total_cwnd),
+            summary: true,
         })
     }
 
