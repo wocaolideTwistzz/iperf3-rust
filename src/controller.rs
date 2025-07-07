@@ -28,6 +28,8 @@ pub enum ControllerMessage {
     /// Asks the controller to create a new stream using this socket.
     CreateStream(TcpStream),
     StreamTerminated(usize),
+    // Terminate the controller runner.
+    Terminate,
 }
 
 pub struct Controller {
@@ -98,7 +100,7 @@ impl Controller {
                         .publisher
                         .send(WorkerMessage::Terminate)
                         .unwrap_or_else(|e| {
-                            debug!("Failed to send terminate signal: {e}");
+                            debug!("Failed to send terminate signal: {e:?}");
                             0
                         });
                     let local_results = self.collect_stream_results().await?;
@@ -121,7 +123,7 @@ impl Controller {
                         .publisher
                         .send(WorkerMessage::Terminate)
                         .unwrap_or_else(|e| {
-                            debug!("Failed to send terminate signal: {e}");
+                            debug!("Failed to send terminate signal: {e:?}");
                             0
                         });
                     let local_results = self.collect_stream_results().await?;
@@ -137,8 +139,9 @@ impl Controller {
             old_state = state;
 
             if self.perf.shutdown.try_recv().is_ok() {
-                self.perf.set_state(State::Terminate).await?;
-                continue;
+                self.sender
+                    .try_send(ControllerMessage::Terminate)
+                    .unwrap_or_else(|e| debug!("Failed to communicate with controller: {e:?}"));
             }
 
             if self.perf.role == Role::Server {
@@ -171,7 +174,7 @@ impl Controller {
         // to be created first. That's an implicit assumption as part of the protocol.
         let total_needed_streams = self.perf.num_send_streams + self.perf.num_receive_streams;
 
-        while self.stream_index < total_needed_streams - 1 {
+        while self.stream_index < total_needed_streams {
             let stream = self.connect_data_stream().await?;
             self.create_and_register_stream_worker(stream);
         }
@@ -193,7 +196,7 @@ impl Controller {
         #[cfg(target_os = "linux")]
         if let Some(mss) = self.perf.params.mss {
             crate::net_util_linux::set_mss(&socket, mss as i32)
-                .unwrap_or_else(|e| warn!("Failed to set MSS: {}", e));
+                .unwrap_or_else(|e| warn!("Failed to set MSS: {e:?}"));
         }
 
         debug!(
@@ -250,7 +253,7 @@ impl Controller {
             let result = worker.run_worker().await?;
             controller_sender
                 .try_send(ControllerMessage::StreamTerminated(worker_id))
-                .unwrap_or_else(|e| debug!("Failed to communicate with controller: {e}"));
+                .unwrap_or_else(|e| debug!("Failed to communicate with controller: {e:?}"));
             Ok(result)
         });
         self.workers.insert(worker_id, handler);
@@ -268,10 +271,10 @@ impl Controller {
                 ),
                 Ok(Ok(Ok(result))) => _ = self.stream_results.insert(id, result),
                 Ok(Ok(Err(e))) => warn!(
-                    "Stream {} terminated with error ({}) ignoring its results!",
+                    "Stream {} terminated with error ({:?}) ignoring its results!",
                     id, e
                 ),
-                Ok(Err(e)) => warn!("Failed to join stream {}: {}", id, e),
+                Ok(Err(e)) => warn!("Failed to join stream {}: {:?}", id, e),
             }
         }
         Ok(self.stream_results.clone())
@@ -328,6 +331,7 @@ impl Controller {
                     self.perf.set_state(State::ExchangeResults).await?;
                 }
             }
+            Some(ControllerMessage::Terminate) => self.perf.set_state(State::Terminate).await?,
             None => {
                 warn!("receive empty control message")
             }

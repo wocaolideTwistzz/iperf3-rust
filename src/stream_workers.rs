@@ -79,7 +79,7 @@ impl StreamWorker {
 
         let interval = Duration::from_secs(1);
         let start_time = Instant::now();
-        let timeout_duration = Duration::from_millis(self.params.duration);
+        let timeout_duration = Duration::from_secs(self.params.duration);
         let mut index = 0;
 
         let mut bytes_transferred = 0_usize;
@@ -139,7 +139,7 @@ impl StreamWorker {
                             .unwrap_or_else(|e| {
                                 use crate::net_util_linux::TcpInfo;
 
-                                warn!("Failed to get TCP info: {}", e);
+                                warn!("Failed to get TCP info: {e:?}");
                                 TcpInfo::default()
                             });
 
@@ -208,7 +208,7 @@ impl StreamWorker {
         if self.params.no_delay {
             self.stream
                 .set_nodelay(self.params.no_delay)
-                .unwrap_or_else(|e| warn!("Failed to set no delay: {}", e));
+                .unwrap_or_else(|e| warn!("Failed to set no delay: {e:?}"));
         }
 
         if let Some(socket_buffers) = self.params.socket_buffers {
@@ -223,10 +223,10 @@ impl StreamWorker {
                 let sock = tokio::net::TcpSocket::from_raw_socket(self.stream.as_raw_socket());
 
                 sock.set_recv_buffer_size(socket_buffers)
-                    .unwrap_or_else(|e| warn!("Failed to set recv socket buffer size: {}", e));
+                    .unwrap_or_else(|e| warn!("Failed to set recv socket buffer size: {e:?}"));
 
                 sock.set_send_buffer_size(socket_buffers)
-                    .unwrap_or_else(|e| warn!("Failed to set send socket buffer size: {}", e));
+                    .unwrap_or_else(|e| warn!("Failed to set send socket buffer size: {e:?}"));
 
                 std::mem::forget(sock);
             };

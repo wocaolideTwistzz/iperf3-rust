@@ -70,6 +70,9 @@ pub enum NetUtilError {
 
     #[error("Control message too large: {0}, max allowed: {MAX_CONTROL_MESSAGE_SIZE}")]
     ControlMessageTooLarge(u32),
+ 
+    #[error("Connected was closed by peer")]
+    ConnectionWasClosedByPeer,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -91,6 +94,9 @@ pub enum StreamWorkerError {
 pub enum ClientError {}
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
-pub enum ServerError {}
+pub enum ServerError {
+    #[error("perf test already in-flight")]
+    PerfTestAlreadyInFlight,
+}
 
 pub type Result<T> = std::result::Result<T, Error>;

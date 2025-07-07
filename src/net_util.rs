@@ -93,7 +93,7 @@ where
     buf.put_slice(&payload);
 
     debug!("Sent: {} bytes", buf.len());
-    stream.write_all(&buf).await?;
+    stream.write_all(&buf[..]).await?;
     Ok(())
 }
 
@@ -109,11 +109,31 @@ where
     }
 
     let mut buf = BytesMut::with_capacity(message_size as usize);
-    stream.read_exact(&mut buf).await?;
+    let mut remaining_bytes: u64 = message_size as u64;
+    let mut counter: usize = 0;
+    while remaining_bytes > 0 {
+        counter += 1;
+        // Only read up-to the remaining-bytes, don't over read.
+        // It's important that we don't read more as we don't want to mess up
+        // the protocol. The next read should find the LENGTH as the first 4 bytes.
+        let mut handle = stream.take(remaining_bytes);
+        let bytes_read = handle.read_buf(&mut buf).await?;
+        if bytes_read == 0 {
+            // We have reached EOF. This is unexpected.
+            // XXX: Handle
+            return Err(NetUtilError::ConnectionWasClosedByPeer)
+        }
+        // usize is u64 in most cases.
+        remaining_bytes -= bytes_read as u64;
+    }
+    debug!(
+        "Received a control message ({} bytes) in {} iterations",
+        message_size, counter
+    );
+    assert_eq!(message_size as usize, buf.len());
 
-    debug!("Received: {} bytes", buf.len());
-
-    Ok(serde_json::from_slice(&buf)?)
+    let obj = serde_json::from_slice(&buf)?;
+    Ok(obj)
 }
 
 pub trait TcpStreamExt {
@@ -126,14 +146,14 @@ impl TcpStreamExt for TcpStream {
     fn local_addr_string(&self) -> String {
         match self.local_addr() {
             Ok(addr) => addr.to_string(),
-            Err(e) => format!("<UNKNOWN:{e}>"),
+            Err(e) => format!("<UNKNOWN:{e:?}>"),
         }
     }
 
     fn peer_addr_string(&self) -> String {
         match self.peer_addr() {
             Ok(addr) => addr.to_string(),
-            Err(e) => format!("<UNKNOWN:{e}>"),
+            Err(e) => format!("<UNKNOWN:{e:?}>"),
         }
     }
 }
