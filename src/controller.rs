@@ -1,6 +1,5 @@
 use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     time::Duration,
 };
 
@@ -57,7 +56,7 @@ impl Controller {
     /// This is the test controller code, when this function terminates, the test is done.
     pub async fn run_controller(mut self) -> Result<()> {
         debug!("Controller has started");
-        let mut old_state = self.perf.state.clone().lock().await.clone();
+        let old_state = self.perf.state.clone().lock().await.clone();
         loop {
             let state = self.perf.state.clone().lock().await.clone();
             debug!("Controller state: {:?}", state);

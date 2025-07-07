@@ -132,25 +132,37 @@ impl StreamWorker {
             let now = Instant::now();
             let current_duration = now.duration_since(current_interval_start);
             if current_duration >= interval {
-                let mut stats = StreamStats {
-                    id: self.id,
-                    index: Some(index),
-                    duration: current_duration.as_millis() as u64,
-                    bytes_transferred,
-                    retransmits: None,
-                    cwnd: None,
-                    summary: false,
-                };
-                #[cfg(target_os = "linux")]
-                {
-                    use crate::net_util::get_tcp_info;
+                let stats = {
+                    #[cfg(target_os = "linux")]
+                    {
+                        let tcp_info =
+                            crate::net_util_linux::get_tcp_info(&self.stream).unwrap_or_default();
 
-                    let tcp_info = get_tcp_info(&self.stream).unwrap_or_default();
-                    stats.retransmits = Some(tcp_info.tcpi_retransmits as usize);
-                    stats.cwnd = Some(tcp_info.tcpi_snd_cwnd as usize);
-                    total_retransmits += tcp_info.tcpi_retransmits as usize;
-                    total_cwnd += tcp_info.tcpi_snd_cwnd as usize;
-                }
+                        total_retransmits += tcp_info.tcpi_retransmits as usize;
+                        total_cwnd += tcp_info.tcpi_snd_cwnd as usize;
+
+                        StreamStats {
+                            id: self.id,
+                            index: Some(index),
+                            duration: current_duration.as_millis() as u64,
+                            bytes_transferred,
+                            retransmits: Some(tcp_info.tcpi_retransmits as usize),
+                            cwnd: Some(tcp_info.tcpi_snd_cwnd as usize),
+                            summary: false,
+                        }
+                    }
+
+                    #[cfg(not(target_os = "linux"))]
+                    StreamStats {
+                        id: self.id,
+                        index: Some(index),
+                        duration: current_duration.as_millis() as u64,
+                        bytes_transferred,
+                        retransmits: None,
+                        cwnd: None,
+                        summary: false,
+                    }
+                };
 
                 self.sender
                     .send(stats)
