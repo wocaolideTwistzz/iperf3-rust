@@ -1,7 +1,8 @@
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 
 use crate::error::{Error, Result};
 use libc::{__u8, __u16, __u32, __u64};
+use std::os::fd::AsRawFd;
 
 #[repr(C)]
 #[derive(Default)]
@@ -84,8 +85,6 @@ pub struct TcpInfo {
 }
 
 pub fn get_tcp_info(stream: &TcpStream) -> Result<TcpInfo> {
-    use std::os::fd::AsRawFd;
-
     let fd = stream.as_raw_fd();
     let mut tcp_info = TcpInfo::default();
     let mut tcp_info_len = std::mem::size_of::<TcpInfo>() as u32;
@@ -104,4 +103,21 @@ pub fn get_tcp_info(stream: &TcpStream) -> Result<TcpInfo> {
     }
 
     Ok(tcp_info)
+}
+
+pub fn set_mss(socket: &TcpSocket, mss: i32) -> Result<()> {
+    let fd = socket.as_raw_fd();
+    let ret = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_MAXSEG,
+            &mss as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&mss) as libc::socklen_t,
+        )
+    };
+    if ret != 0 {
+        return Err(Error::CallLibcError(std::io::Error::last_os_error()));
+    }
+    Ok(())
 }

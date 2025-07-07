@@ -1,18 +1,19 @@
 use std::sync::Arc;
 
-use tokio::{net::TcpStream, sync::{mpsc, Mutex}};
+use tokio::{
+    net::TcpStream,
+    sync::{Mutex, broadcast, mpsc},
+};
 
 use crate::{
+    constant::INTERNAL_PORT_BUFFER,
     error::Result,
-    message::{Parameters, Role, ServerMessage, State, StreamStats},
+    message::{Direction, Parameters, Role, ServerMessage, State, StreamStats},
     net_util::server_write_message,
 };
 
 /// A master object that holds the state of this perf test run
 pub struct Perf {
-    /// Bind local address with ipv6?
-    pub prefer_ipv6: bool,
-
     /// Bind local address.
     pub bind_address: Option<String>,
 
@@ -41,10 +42,52 @@ pub struct Perf {
     pub num_receive_streams: u16,
 
     /// Stream stats sender.
-    pub stats_sender: Option<mpsc::Sender<StreamStats>>
+    pub(crate) stats_sender: Option<mpsc::Sender<StreamStats>>,
+
+    /// A broadcast receiver that is used to signal shutdown.   
+    pub shutdown: broadcast::Receiver<()>,
 }
 
 impl Perf {
+    pub fn new_with_stats_receiver(
+        bind_address: Option<String>,
+        server_address: Option<String>,
+        cookie: String,
+        role: Role,
+        params: Parameters,
+        control_socket: TcpStream,
+        shutdown: broadcast::Receiver<()>,
+    ) -> (Self, mpsc::Receiver<StreamStats>) {
+        let mut num_send_streams = 0;
+        let mut num_receive_streams = 0;
+        match params.direction {
+            Direction::ClientToServer => num_send_streams = params.parallel,
+            Direction::ServerToClient => num_receive_streams = params.parallel,
+            Direction::Bidirectional => {
+                num_send_streams = params.parallel;
+                num_receive_streams = params.parallel;
+            }
+        }
+        if matches!(role, Role::Server) {
+            std::mem::swap(&mut num_send_streams, &mut num_receive_streams);
+        }
+        let (tx, rx) = mpsc::channel(INTERNAL_PORT_BUFFER);
+        let perf = Perf {
+            bind_address,
+            server_address,
+            cookie,
+            state: Arc::new(Mutex::new(State::Start)),
+            control_socket,
+            role,
+            params,
+            num_send_streams,
+            num_receive_streams,
+            stats_sender: Some(tx),
+            shutdown,
+        };
+        (perf, rx)
+    }
+
     pub async fn set_state(&mut self, state: State) -> Result<()> {
         if self.role == Role::Server {
             server_write_message(

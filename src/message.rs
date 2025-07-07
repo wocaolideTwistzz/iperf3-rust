@@ -1,6 +1,12 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
-use crate::error::{ClientError, ServerError};
+use crate::{
+    constant::DEFAULT_BLOCK_SIZE,
+    error::{ClientError, ServerError},
+    opts::ClientOpts,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientEnvelope {
@@ -19,7 +25,7 @@ pub enum ClientMessage {
     SendParameters(Parameters),
 
     /// Send results to the server
-    SendResults(Vec<StreamStats>),
+    SendResults(HashMap<usize, StreamStats>),
 }
 
 /// Message sent by the server to the client
@@ -34,7 +40,7 @@ pub enum ServerMessage {
     /// Welcome message sent by the server to the client
     Welcome,
     SetState(State),
-    SendResults(Vec<StreamStats>),
+    SendResults(HashMap<usize, StreamStats>),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -55,12 +61,10 @@ pub enum Direction {
 pub struct Parameters {
     // TODO: implement UDP
     // protocol:
+    pub prefer_ipv6: bool,
 
     // direction of the test
     pub direction: Direction,
-
-    // omit the first n seconds
-    pub omit: u64,
 
     // duration of the test
     pub duration: u64,
@@ -70,7 +74,7 @@ pub struct Parameters {
 
     pub client_version: String,
 
-    // length of buffer to read or write (default 128 KB for TCP)
+    // length of buffer to read or write (default 2 MB for TCP)
     pub block_size: usize,
 
     /// Set TCP no delay, disabling Nagle's Algorithm
@@ -91,7 +95,8 @@ pub struct StreamStats {
     pub bytes_transferred: usize,
     pub retransmits: Option<usize>, // tcp retransmits (Linux only)
     pub cwnd: Option<usize>,        // tcp cwnd (Linux only)
-    pub summary: bool,
+    pub is_peer: bool,
+    pub is_summary: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -112,5 +117,29 @@ pub enum State {
     /// exchange once it receives a transition into the state.
     ExchangeResults,
 
-    DisplayResults,
+    Terminate,
+}
+
+impl Parameters {
+    pub fn from_opts(opts: &ClientOpts) -> Self {
+        let direction = if opts.bidir {
+            Direction::Bidirectional
+        } else if opts.reverse {
+            Direction::ServerToClient
+        } else {
+            Direction::ClientToServer
+        };
+
+        Self {
+            prefer_ipv6: opts.prefer_ipv6,
+            direction,
+            duration: opts.time,
+            parallel: opts.parallel,
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            block_size: opts.length.unwrap_or(DEFAULT_BLOCK_SIZE),
+            no_delay: opts.no_delay,
+            socket_buffers: opts.window,
+            mss: opts.set_mss,
+        }
+    }
 }

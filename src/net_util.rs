@@ -1,9 +1,11 @@
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
 use bytes::{BufMut, BytesMut};
 use log::debug;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpSocket, TcpStream},
 };
 
 use crate::{
@@ -134,4 +136,25 @@ impl TcpStreamExt for TcpStream {
             Err(e) => format!("<UNKNOWN:{e}>"),
         }
     }
+}
+
+pub fn new_socket(bind_addr: Option<String>, prefer_ipv6: bool) -> Result<TcpSocket> {
+    let socket_addr: SocketAddr = match bind_addr {
+        Some(addr) => format!("{}:0", addr).parse()?,
+        None => {
+            if prefer_ipv6 {
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
+            } else {
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+            }
+        }
+    };
+    let socket = if socket_addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }?;
+    socket.bind(socket_addr)?;
+
+    Ok(socket)
 }

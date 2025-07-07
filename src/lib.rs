@@ -1,3 +1,4 @@
+pub mod client;
 pub mod constant;
 pub mod controller;
 pub mod error;
@@ -5,5 +6,7 @@ pub mod message;
 pub mod net_util;
 #[cfg(target_os = "linux")]
 pub mod net_util_linux;
+pub mod opts;
 pub mod perf;
+pub mod server;
 pub mod stream_workers;

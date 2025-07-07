@@ -1,11 +1,8 @@
-use std::{
-    net::SocketAddr,
-    time::Duration,
-};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-use log::{debug, warn};
+use log::{debug, info, warn};
 use tokio::{
-    net::{TcpSocket, TcpStream},
+    net::TcpStream,
     sync::{
         broadcast,
         mpsc::{self, Receiver, Sender},
@@ -16,9 +13,12 @@ use tokio::{
 
 use crate::{
     constant::INTERNAL_PORT_BUFFER,
-    error::Result,
-    message::{ClientMessage, Direction, Role, State, StreamStats},
-    net_util::{TcpStreamExt, client_read_message, client_write_message},
+    error::{Error, Result},
+    message::{ClientMessage, Direction, Role, ServerMessage, State, StreamStats},
+    net_util::{
+        TcpStreamExt, client_read_message, client_write_message, new_socket, server_read_message,
+        server_write_message,
+    },
     perf::Perf,
     stream_workers::{StreamWorker, WorkerMessage},
 };
@@ -36,7 +36,8 @@ pub struct Controller {
     stream_index: u16,
     receiver: Receiver<ControllerMessage>,
     publisher: broadcast::Sender<WorkerMessage>,
-    workers: Vec<JoinHandle<Result<StreamStats>>>,
+    workers: HashMap<usize, JoinHandle<Result<StreamStats>>>,
+    stream_results: HashMap<usize, StreamStats>,
 }
 
 impl Controller {
@@ -49,14 +50,15 @@ impl Controller {
             perf,
             receiver,
             publisher,
-            workers: vec![],
+            workers: HashMap::new(),
+            stream_results: HashMap::new(),
         }
     }
 
     /// This is the test controller code, when this function terminates, the test is done.
     pub async fn run_controller(mut self) -> Result<()> {
         debug!("Controller has started");
-        let old_state = self.perf.state.clone().lock().await.clone();
+        let mut old_state = self.perf.state.clone().lock().await.clone();
         loop {
             let state = self.perf.state.clone().lock().await.clone();
             debug!("Controller state: {:?}", state);
@@ -91,11 +93,73 @@ impl Controller {
                 State::ExchangeResults => {
                     // Do we have active streams yet? We should ask these to terminate and wait
                     // This is best-effort.
+                    debug!("Exchanging test results");
+                    _ = self
+                        .publisher
+                        .send(WorkerMessage::Terminate)
+                        .unwrap_or_else(|e| {
+                            debug!("Failed to send terminate signal: {e}");
+                            0
+                        });
+                    let local_results = self.collect_stream_results().await?;
+                    let remote_results = self.exchange_results().await?;
+
+                    if let Some(sender) = self.perf.stats_sender.take() {
+                        for (_, stats) in local_results {
+                            sender.send(stats).await?;
+                        }
+                        for (_, stats) in remote_results {
+                            sender.send(stats).await?;
+                        }
+                    }
+                    break;
+                }
+                // We received a terminate signal, we should ask the workers to terminate and wait
+                State::Terminate => {
+                    debug!("Receive terminate signal");
+                    _ = self
+                        .publisher
+                        .send(WorkerMessage::Terminate)
+                        .unwrap_or_else(|e| {
+                            debug!("Failed to send terminate signal: {e}");
+                            0
+                        });
+                    let local_results = self.collect_stream_results().await?;
+                    if let Some(sender) = self.perf.stats_sender.take() {
+                        for (_, stats) in local_results {
+                            sender.send(stats).await?;
+                        }
+                    }
+                    return Ok(());
                 }
                 _ => {}
             }
+            old_state = state;
+
+            if self.perf.shutdown.try_recv().is_ok() {
+                self.perf.set_state(State::Terminate).await?;
+                continue;
+            }
+
+            if self.perf.role == Role::Server {
+                // Server
+                let message = self.receiver.recv().await;
+                self.process_internal_message(message).await?;
+            } else {
+                // Client
+                tokio::select! {
+                    internal_message = self.receiver.recv() => {
+                        self.process_internal_message(internal_message).await?;
+                    },
+                    server_message = client_read_message(&mut self.perf.control_socket) => {
+                        self.process_server_message(server_message?).await?;
+                    }
+                    else => break,
+                }
+            }
         }
-        todo!()
+        info!("iperf Done");
+        Ok(())
     }
 
     /// Executed only once on the client. Established N connections to the server according to the
@@ -117,16 +181,8 @@ impl Controller {
     /// Creates a connection to the server that serves as a data stream to test the network.
     /// The method initialize the connection and performs the authentication as well.
     async fn connect_data_stream(&self) -> Result<TcpStream> {
-        let local_addr: SocketAddr = match self.perf.bind_address.as_ref() {
-            Some(addr) => addr.parse()?,
-            None => {
-                if self.perf.prefer_ipv6 {
-                    "[::]:0".parse()?
-                } else {
-                    "0.0.0.0:0".parse()?
-                }
-            }
-        };
+        let socket = new_socket(self.perf.bind_address.clone(), self.perf.params.prefer_ipv6)?;
+
         let remote_addr: SocketAddr = self
             .perf
             .server_address
@@ -134,16 +190,16 @@ impl Controller {
             .expect("empty server address")
             .parse()?;
 
-        let socket = if local_addr.is_ipv4() {
-            TcpSocket::new_v4()?
-        } else {
-            TcpSocket::new_v6()?
-        };
-        socket.bind(local_addr)?;
+        #[cfg(target_os = "linux")]
+        if let Some(mss) = self.perf.params.mss {
+            crate::net_util_linux::set_mss(&socket, mss as i32)
+                .unwrap_or_else(|e| warn!("Failed to set MSS: {}", e));
+        }
 
         debug!(
-            "Opening a data stream: {} -> {}...",
-            local_addr, remote_addr
+            "Opening a data stream: {:?} -> {}...",
+            socket.local_addr(),
+            remote_addr
         );
         let mut stream = socket.connect(remote_addr).await?;
 
@@ -197,13 +253,12 @@ impl Controller {
                 .unwrap_or_else(|e| debug!("Failed to communicate with controller: {e}"));
             Ok(result)
         });
-        self.workers.push(handler);
+        self.workers.insert(worker_id, handler);
         self.stream_index += 1;
     }
 
-    async fn collect_stream_results(&mut self) -> Result<Vec<StreamStats>> {
-        let mut stream_results = vec![];
-        for (id, handler) in self.workers.drain(..).enumerate() {
+    async fn collect_stream_results(&mut self) -> Result<HashMap<usize, StreamStats>> {
+        for (id, handler) in self.workers.drain() {
             debug!("Waiting on stream {} to terminate", id);
 
             match timeout(Duration::from_secs(5), handler).await {
@@ -211,7 +266,7 @@ impl Controller {
                     "Timeout waiting on stream {} to terminate, ignoring it.",
                     id
                 ),
-                Ok(Ok(Ok(result))) => stream_results.push(result),
+                Ok(Ok(Ok(result))) => _ = self.stream_results.insert(id, result),
                 Ok(Ok(Err(e))) => warn!(
                     "Stream {} terminated with error ({}) ignoring its results!",
                     id, e
@@ -219,6 +274,85 @@ impl Controller {
                 Ok(Err(e)) => warn!("Failed to join stream {}: {}", id, e),
             }
         }
-        Ok(stream_results)
+        Ok(self.stream_results.clone())
+    }
+
+    /// Exchanges the test results.
+    async fn exchange_results(&mut self) -> Result<HashMap<usize, StreamStats>> {
+        if self.perf.role == Role::Client {
+            // Send ours then read the peer's results.
+            client_write_message(
+                &mut self.perf.control_socket,
+                ClientMessage::SendResults(self.stream_results.clone()),
+            )
+            .await?;
+
+            match client_read_message(&mut self.perf.control_socket).await? {
+                ServerMessage::SendResults(mut results) => {
+                    results.iter_mut().for_each(|(_, v)| v.is_peer = true);
+                    Ok(results)
+                }
+                m => Err(Error::UnexpectedServerMessage(m)),
+            }
+        } else {
+            let remote_result = match server_read_message(&mut self.perf.control_socket).await? {
+                ClientMessage::SendResults(mut results) => {
+                    results.iter_mut().for_each(|(_, v)| v.is_peer = true);
+                    results
+                }
+                m => return Err(Error::UnexpectedClientMessage(m)),
+            };
+            server_write_message(
+                &mut self.perf.control_socket,
+                ServerMessage::SendResults(self.stream_results.clone()),
+            )
+            .await?;
+            Ok(remote_result)
+        }
+    }
+
+    /// A handler when we receive a ControllerMessage from other components
+    async fn process_internal_message(&mut self, message: Option<ControllerMessage>) -> Result<()> {
+        match message {
+            Some(ControllerMessage::CreateStream(stream)) => self.accept_stream(stream).await?,
+            Some(ControllerMessage::StreamTerminated(id)) => {
+                if let Some(handler) = self.workers.remove(&id) {
+                    match handler.await? {
+                        Ok(result) => _ = self.stream_results.insert(id, result),
+                        Err(e) => warn!(
+                            "Stream {id} has terminated with an error, We cannot fetch its total stream stats: {e:?}"
+                        ),
+                    }
+                }
+                if self.workers.is_empty() && self.perf.role == Role::Server {
+                    self.perf.set_state(State::ExchangeResults).await?;
+                }
+            }
+            None => {
+                warn!("receive empty control message")
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_server_message(&mut self, message: ServerMessage) -> Result<()> {
+        match message {
+            ServerMessage::SetState(state) => self.perf.set_state(state).await?,
+            e => warn!("Unexpected server message: {e:?}"),
+        }
+        Ok(())
+    }
+
+    /// Executed only on the server
+    async fn accept_stream(&mut self, stream: TcpStream) -> Result<()> {
+        assert_eq!(self.perf.role, Role::Server);
+
+        let total_needed_stream =
+            (self.perf.num_send_streams + self.perf.num_receive_streams) as usize;
+        self.create_and_register_stream_worker(stream);
+        if self.workers.len() == total_needed_stream {
+            self.perf.set_state(State::Running).await?;
+        }
+        Ok(())
     }
 }

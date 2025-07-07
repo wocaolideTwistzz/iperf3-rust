@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{constant::MAX_CONTROL_MESSAGE_SIZE, message::StreamStats, stream_workers::WorkerMessage};
+use crate::{
+    constant::MAX_CONTROL_MESSAGE_SIZE,
+    message::{ClientMessage, ServerMessage, StreamStats},
+    stream_workers::WorkerMessage,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -22,8 +26,23 @@ pub enum Error {
     #[error("Publish worker message error: {0}")]
     PublishWorkerMessageError(#[from] tokio::sync::broadcast::error::SendError<WorkerMessage>),
 
+    #[error("Unexpected server message: {0:?}")]
+    UnexpectedServerMessage(ServerMessage),
+
+    #[error("Unexpected client message: {0:?}")]
+    UnexpectedClientMessage(ClientMessage),
+
+    #[error("Send stream stats error: {0}")]
+    SendStreamStatsError(#[from] tokio::sync::mpsc::error::SendError<StreamStats>),
+
+    #[error("Join task error: {0}")]
+    JoinTaskError(#[from] tokio::task::JoinError),
+
     #[error("Server write error: {0}")]
     ServerWriteError(#[source] NetUtilError),
+
+    #[error("Protocol read timeout")]
+    ProtocolReadTimeout(#[from] tokio::time::error::Elapsed),
 
     #[error("Server read error: {0}")]
     ServerReadError(#[source] NetUtilError),

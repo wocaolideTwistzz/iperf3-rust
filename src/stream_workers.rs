@@ -135,8 +135,13 @@ impl StreamWorker {
                 let stats = {
                     #[cfg(target_os = "linux")]
                     {
-                        let tcp_info =
-                            crate::net_util_linux::get_tcp_info(&self.stream).unwrap_or_default();
+                        let tcp_info = crate::net_util_linux::get_tcp_info(&self.stream)
+                            .unwrap_or_else(|e| {
+                                use crate::net_util_linux::TcpInfo;
+
+                                warn!("Failed to get TCP info: {}", e);
+                                TcpInfo::default()
+                            });
 
                         total_retransmits += tcp_info.tcpi_retransmits as usize;
                         total_cwnd += tcp_info.tcpi_snd_cwnd as usize;
@@ -148,7 +153,8 @@ impl StreamWorker {
                             bytes_transferred,
                             retransmits: Some(tcp_info.tcpi_retransmits as usize),
                             cwnd: Some(tcp_info.tcpi_snd_cwnd as usize),
-                            summary: false,
+                            is_peer: false,
+                            is_summary: false,
                         }
                     }
 
@@ -160,7 +166,8 @@ impl StreamWorker {
                         bytes_transferred,
                         retransmits: None,
                         cwnd: None,
-                        summary: false,
+                        is_peer: false,
+                        is_summary: false,
                     }
                 };
 
@@ -192,7 +199,8 @@ impl StreamWorker {
             bytes_transferred: total_bytes_transferred,
             retransmits: Some(total_retransmits),
             cwnd: Some(total_cwnd),
-            summary: true,
+            is_peer: false,
+            is_summary: true,
         })
     }
 
