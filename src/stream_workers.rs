@@ -92,6 +92,15 @@ impl StreamWorker {
 
         loop {
             if start_time.elapsed() > timeout_duration {
+                debug!("Test time is up!");
+                break;
+            }
+            if self
+                .params
+                .max_length
+                .is_some_and(|v| v > total_bytes_transferred)
+            {
+                debug!("Test bytes is up!");
                 break;
             }
 

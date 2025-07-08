@@ -88,6 +88,9 @@ pub struct Parameters {
 
     /// seconds between periodic throughput reports
     pub interval: u64,
+
+    /// maximum length of data to send/recv
+    pub max_length: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -144,6 +147,7 @@ impl Parameters {
             socket_buffers: opts.window,
             mss: opts.set_mss,
             interval: opts.interval.unwrap_or(DEFAULT_INTERVAL_SEC),
+            max_length: opts.bytes,
         }
     }
 }

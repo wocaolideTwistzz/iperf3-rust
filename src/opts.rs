@@ -50,7 +50,7 @@ pub struct ClientOpts {
 
     /// number of bytes to transmit (will trigger the minimum value between time and bytes)
     #[clap(short = 'n', long)]
-    pub bytes: Option<u64>,
+    pub bytes: Option<usize>,
 
     /// length of buffer to read or write
     /// (default 2 MB for TCP, dynamic or 1460 for UDP)
