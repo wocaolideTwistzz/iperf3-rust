@@ -8,6 +8,7 @@ use crate::{
     net_util::{TcpStreamExt, client_read_message, client_write_message, new_socket},
     opts::{ClientOpts, CommonOpts},
     perf::Perf,
+    ui,
 };
 
 pub async fn start_client(
@@ -77,11 +78,13 @@ pub async fn run_client(
     client_opts: &ClientOpts,
     shutdown: broadcast::Receiver<()>,
 ) {
+    ui::print_client_banner(common_opts, client_opts);
     let mut rx = start_client(common_opts, client_opts, shutdown)
         .await
         .unwrap();
 
+    ui::print_header();
     while let Some(stats) = rx.recv().await {
-        println!("{stats:?}");
+        ui::print_stats(&stats);
     }
 }

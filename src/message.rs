@@ -101,6 +101,7 @@ pub struct StreamStats {
     pub bytes_transferred: usize,
     pub retransmits: Option<usize>, // tcp retransmits (Linux only)
     pub cwnd: Option<usize>,        // tcp cwnd (Linux only)
+    pub is_sending: bool,
     pub is_peer: bool,
     pub is_summary: bool,
 }

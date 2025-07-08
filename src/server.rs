@@ -2,6 +2,7 @@ use crate::{
     controller::Controller,
     error::ServerError,
     net_util::{TcpStreamExt, server_write_error},
+    ui,
 };
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -79,7 +80,10 @@ pub async fn start_server(
                                         info!("[{peer_string}] Test Created");
 
                                         // Send perf_stats
-                                        _ = tx.send(PerfStats { receiver: perf_stats }).await;
+                                        _ = tx.send(PerfStats {
+                                            peer_addr: peer_string.clone(),
+                                            receiver: perf_stats,
+                                         }).await;
 
                                         // Keep a weak-ref to this test here.
                                         in_flight_test_state = Arc::downgrade(&perf.state);
@@ -115,11 +119,14 @@ pub async fn start_server(
 }
 
 pub async fn run_server(common_opts: &CommonOpts, shutdown: broadcast::Receiver<()>) {
+    ui::print_server_banner(common_opts);
+
     let mut perf_stats_receiver = start_server(common_opts, shutdown).await.unwrap();
 
     while let Some(mut perf_stats) = perf_stats_receiver.recv().await {
+        ui::print_accept(perf_stats.peer_addr);
         while let Some(stat) = perf_stats.receiver.recv().await {
-            println!("{stat:?}");
+            ui::print_stats(&stat);
         }
     }
 }
@@ -194,5 +201,6 @@ async fn handle_create_stream(
 }
 
 pub struct PerfStats {
+    pub peer_addr: String,
     pub receiver: mpsc::Receiver<StreamStats>,
 }
