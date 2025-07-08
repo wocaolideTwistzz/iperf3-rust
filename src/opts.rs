@@ -85,4 +85,8 @@ pub struct ClientOpts {
     /// prefer IPv6
     #[clap(long)]
     pub prefer_ipv6: bool,
+
+    /// seconds between periodic throughput reports
+    #[clap(short = 'i', long)]
+    pub interval: Option<u64>,
 }

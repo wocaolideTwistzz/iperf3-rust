@@ -10,3 +10,4 @@ pub mod opts;
 pub mod perf;
 pub mod server;
 pub mod stream_workers;
+pub mod ui;

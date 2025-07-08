@@ -77,9 +77,10 @@ impl StreamWorker {
             return Err(Error::WorkerTerminated);
         }
 
-        let interval = Duration::from_secs(1);
+        let interval = Duration::from_secs(self.params.interval);
         let start_time = Instant::now();
         let timeout_duration = Duration::from_secs(self.params.duration);
+
         let mut index = 0;
 
         let mut bytes_transferred = 0_usize;

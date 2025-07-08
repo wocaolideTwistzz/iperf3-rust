@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    constant::DEFAULT_BLOCK_SIZE,
+    constant::{DEFAULT_BLOCK_SIZE, DEFAULT_INTERVAL_SEC},
     error::{ClientError, ServerError},
     opts::ClientOpts,
 };
@@ -85,6 +85,9 @@ pub struct Parameters {
 
     /// Set TCP/SCTP maximum segment size (MTU - 40 bytes)
     pub mss: Option<usize>,
+
+    /// seconds between periodic throughput reports
+    pub interval: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -140,6 +143,7 @@ impl Parameters {
             no_delay: opts.no_delay,
             socket_buffers: opts.window,
             mss: opts.set_mss,
+            interval: opts.interval.unwrap_or(DEFAULT_INTERVAL_SEC),
         }
     }
 }
