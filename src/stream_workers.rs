@@ -152,7 +152,9 @@ impl StreamWorker {
                             duration: current_duration.as_millis() as u64,
                             bytes_transferred,
                             retransmits: Some(tcp_info.tcpi_retransmits as usize),
-                            cwnd: Some(tcp_info.tcpi_snd_cwnd as usize),
+                            cwnd: Some(
+                                tcp_info.tcpi_snd_cwnd as usize * tcp_info.tcpi_snd_mss as usize,
+                            ),
                             is_peer: false,
                             is_summary: false,
                         }
