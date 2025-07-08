@@ -85,8 +85,8 @@ impl StreamWorker {
 
         let mut bytes_transferred = 0_usize;
         let mut total_bytes_transferred = 0_usize;
-        let mut total_retransmits = 0_usize;
-        let mut total_cwnd = 0_usize;
+        let mut total_retransmits: Option<usize> = None;
+        let mut last_cwnd: Option<usize> = None;
 
         let mut current_interval_start = Instant::now();
 
@@ -98,7 +98,7 @@ impl StreamWorker {
             if self
                 .params
                 .max_length
-                .is_some_and(|v| v > total_bytes_transferred)
+                .is_some_and(|v| v < total_bytes_transferred)
             {
                 debug!("Test bytes is up!");
                 break;
@@ -128,6 +128,7 @@ impl StreamWorker {
                 let bytes_count = bytes_count.map_err(|e| Error::StreamWorkerError(e.into()))?;
                 if bytes_count > 0 {
                     bytes_transferred += bytes_count;
+                    total_bytes_transferred += bytes_count;
                 } else {
                     warn!("Stream {}'s connection has been closed", self.id);
                     break;
@@ -142,56 +143,33 @@ impl StreamWorker {
             let now = Instant::now();
             let current_duration = now.duration_since(current_interval_start);
             if current_duration >= interval {
-                let stats = {
-                    #[cfg(target_os = "linux")]
-                    {
-                        let tcp_info = crate::net_util_linux::get_tcp_info(&self.stream)
-                            .unwrap_or_else(|e| {
-                                use crate::net_util_linux::TcpInfo;
-
-                                warn!("Failed to get TCP info: {e:?}");
-                                TcpInfo::default()
-                            });
-
-                        total_retransmits += tcp_info.tcpi_retransmits as usize;
-                        total_cwnd += tcp_info.tcpi_snd_cwnd as usize;
-
-                        StreamStats {
-                            id: self.id,
-                            index: Some(index),
-                            duration: current_duration.as_millis() as u64,
-                            bytes_transferred,
-                            retransmits: Some(tcp_info.tcpi_retransmits as usize),
-                            cwnd: Some(
-                                tcp_info.tcpi_snd_cwnd as usize * tcp_info.tcpi_snd_mss as usize,
-                            ),
-                            is_peer: false,
-                            is_summary: false,
-                        }
-                    }
-
-                    #[cfg(not(target_os = "linux"))]
-                    StreamStats {
-                        id: self.id,
-                        index: Some(index),
-                        duration: current_duration.as_millis() as u64,
-                        bytes_transferred,
-                        retransmits: None,
-                        cwnd: None,
-                        is_peer: false,
-                        is_summary: false,
-                    }
-                };
+                let stats = self.current_stats(index, current_duration, bytes_transferred);
+                last_cwnd = stats.cwnd;
 
                 self.sender
                     .send(stats)
                     .await
                     .map_err(|e| Error::StreamWorkerError(e.into()))?;
-                total_bytes_transferred += bytes_transferred;
                 current_interval_start = now;
                 bytes_transferred = 0;
                 index += 1;
             }
+        }
+        self.send_current_stats(index, current_interval_start.elapsed(), bytes_transferred)
+            .await?;
+
+        #[cfg(target_os = "linux")]
+        if total_retransmits.is_none() {
+            let tcp_info = crate::net_util_linux::get_tcp_info(&self.stream).unwrap_or_else(|e| {
+                use crate::net_util_linux::TcpInfo;
+
+                warn!("Failed to get TCP info: {e:?}");
+                TcpInfo::default()
+            });
+
+            total_retransmits =
+                Some(total_retransmits.unwrap_or(0) + tcp_info.tcpi_retransmits as usize);
+            last_cwnd = Some(tcp_info.tcpi_snd_cwnd as usize * tcp_info.tcpi_snd_mss as usize);
         }
 
         // Drain the sockets if we are receiving end, we need to do that to avoid failing the
@@ -209,11 +187,69 @@ impl StreamWorker {
             index: None,
             duration: start_time.elapsed().as_millis() as u64,
             bytes_transferred: total_bytes_transferred,
-            retransmits: Some(total_retransmits),
-            cwnd: Some(total_cwnd),
+            retransmits: total_retransmits,
+            cwnd: last_cwnd,
+            is_sending: self.is_sending,
             is_peer: false,
             is_summary: true,
         })
+    }
+
+    async fn send_current_stats(
+        &mut self,
+        index: usize,
+        current_duration: Duration,
+        bytes_transferred: usize,
+    ) -> Result<()> {
+        let stats = self.current_stats(index, current_duration, bytes_transferred);
+        self.sender
+            .send(stats)
+            .await
+            .map_err(|e| Error::StreamWorkerError(e.into()))?;
+
+        Ok(())
+    }
+
+    fn current_stats(
+        &self,
+        index: usize,
+        current_duration: Duration,
+        bytes_transferred: usize,
+    ) -> StreamStats {
+        #[cfg(target_os = "linux")]
+        {
+            let tcp_info = crate::net_util_linux::get_tcp_info(&self.stream).unwrap_or_else(|e| {
+                use crate::net_util_linux::TcpInfo;
+
+                warn!("Failed to get TCP info: {e:?}");
+                TcpInfo::default()
+            });
+
+            StreamStats {
+                id: self.id,
+                index: Some(index),
+                duration: current_duration.as_millis() as u64,
+                bytes_transferred,
+                retransmits: Some(tcp_info.tcpi_retransmits as usize),
+                cwnd: Some(tcp_info.tcpi_snd_cwnd as usize * tcp_info.tcpi_snd_mss as usize),
+                is_sending: self.is_sending,
+                is_peer: false,
+                is_summary: false,
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        StreamStats {
+            id: self.id,
+            index: Some(index),
+            duration: current_duration.as_millis() as u64,
+            bytes_transferred,
+            retransmits: None,
+            cwnd: None,
+            is_sending: self.is_sending,
+            is_peer: false,
+            is_summary: false,
+        }
     }
 
     fn configure_stream_socket(&mut self) -> Result<()> {
