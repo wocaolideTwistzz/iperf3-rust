@@ -63,7 +63,7 @@ impl Controller {
         let mut old_state = self.perf.state.clone().lock().await.clone();
         loop {
             let state = self.perf.state.clone().lock().await.clone();
-            debug!("Controller state: {:?}", state);
+            debug!("Controller state: {state:?}");
             let role = &self.perf.role;
 
             match state {
@@ -146,8 +146,14 @@ impl Controller {
 
             if self.perf.role == Role::Server {
                 // Server
-                let message = self.receiver.recv().await;
-                self.process_internal_message(message).await?;
+                tokio::select! {
+                    message = self.receiver.recv() => {
+                        self.process_internal_message(message).await?;
+                    },
+                    _ = self.perf.shutdown.recv() => {
+                        self.perf.set_state(State::Terminate).await?;
+                    }
+                }
             } else {
                 // Client
                 tokio::select! {
@@ -156,6 +162,9 @@ impl Controller {
                     },
                     server_message = client_read_message(&mut self.perf.control_socket) => {
                         self.process_server_message(server_message?).await?;
+                    }
+                    _ = self.perf.shutdown.recv() => {
+                        self.perf.set_state(State::Terminate).await?;
                     }
                     else => break,
                 }
@@ -227,7 +236,7 @@ impl Controller {
     fn create_and_register_stream_worker(&mut self, stream: TcpStream) {
         // The first (num_send_streams) are sending (meaning that we `Client` are sending
         // end of this stream)
-        let mut is_sending = self.stream_index <= self.perf.num_send_streams;
+        let mut is_sending = self.stream_index < self.perf.num_send_streams;
         if self.perf.role == Role::Server && self.perf.params.direction == Direction::Bidirectional
         {
             is_sending = !is_sending;
@@ -262,19 +271,15 @@ impl Controller {
 
     async fn collect_stream_results(&mut self) -> Result<HashMap<usize, StreamStats>> {
         for (id, handler) in self.workers.drain() {
-            debug!("Waiting on stream {} to terminate", id);
+            debug!("Waiting on stream {id} to terminate");
 
             match timeout(Duration::from_secs(5), handler).await {
-                Err(_) => warn!(
-                    "Timeout waiting on stream {} to terminate, ignoring it.",
-                    id
-                ),
+                Err(_) => warn!("Timeout waiting on stream {id} to terminate, ignoring it."),
                 Ok(Ok(Ok(result))) => _ = self.stream_results.insert(id, result),
-                Ok(Ok(Err(e))) => warn!(
-                    "Stream {} terminated with error ({:?}) ignoring its results!",
-                    id, e
-                ),
-                Ok(Err(e)) => warn!("Failed to join stream {}: {:?}", id, e),
+                Ok(Ok(Err(e))) => {
+                    warn!("Stream {id} terminated with error ({e:?}) ignoring its results!")
+                }
+                Ok(Err(e)) => warn!("Failed to join stream {id}: {e:?}"),
             }
         }
         Ok(self.stream_results.clone())

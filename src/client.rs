@@ -21,7 +21,7 @@ pub async fn start_client(
         common_opts.port
     );
 
-    info!("Connecting to {}...", server_addr);
+    info!("Connecting to {server_addr}...");
     let socket = new_socket(common_opts.bind.clone(), client_opts.prefer_ipv6)?;
 
     let mut control_socket = socket.connect(server_addr.parse()?).await?;
@@ -66,7 +66,7 @@ pub async fn start_client(
     let controller = Controller::new(perf);
     tokio::spawn(async move {
         if let Err(e) = controller.run_controller().await {
-            error!("Controller error: {:?}", e)
+            error!("Controller error: {e:?}")
         }
     });
     Ok(rx)
@@ -82,6 +82,6 @@ pub async fn run_client(
         .unwrap();
 
     while let Some(stats) = rx.recv().await {
-        println!("{:?}", stats);
+        println!("{stats:?}");
     }
 }

@@ -55,7 +55,6 @@ pub async fn start_server(
                 }
                 inbound = listener.accept() => match inbound {
                     Ok((inbound, _)) => {
-
                         // Do we have a test in-flight?
                         match in_flight_test_state.upgrade() {
                             Some(state_lock) => {
@@ -71,13 +70,13 @@ pub async fn start_server(
                                 let peer_string = inbound.peer_addr_string();
 
                                 // No in-flight test, let's create one.
-                                info!("Accepted connection from {}", peer_string);
+                                info!("Accepted connection from {peer_string}");
 
                                 // Do we have an active test running already?
                                 // If not, let's start a test session and wait for parameters from the client.
                                 match create_perf(inbound, shutdown.resubscribe()).await {
                                     Ok((perf, perf_stats)) => {
-                                        info!("[{}] Test Created", peer_string);
+                                        info!("[{peer_string}] Test Created");
 
                                         // Send perf_stats
                                         _ = tx.send(PerfStats { receiver: perf_stats }).await;
@@ -96,7 +95,7 @@ pub async fn start_server(
                                         });
                                     }
                                     Err(e) => {
-                                        error!("[{}] {:?}", peer_string, e);
+                                        error!("[{peer_string}] {e:?}");
                                     }
                                 }
                             }
@@ -130,7 +129,7 @@ async fn create_perf(
     shutdown: broadcast::Receiver<()>,
 ) -> Result<(Perf, mpsc::Receiver<StreamStats>)> {
     let cookie = read_cookie(&mut control_socket).await?;
-    debug!("Hello received: {}", cookie);
+    debug!("Hello received: {cookie}");
 
     server_write_message(&mut control_socket, ServerMessage::Welcome).await?;
 
@@ -181,20 +180,14 @@ async fn handle_create_stream(
             // We already have a test in-flight, close the connection immediately.
             // Note that here we don't read anything from the socket to avoid
             // unnecessarily being blocked on the client not sending any data.
-            info!(
-                "Test already in-flight, rejecting connection from {}",
-                peer_string
-            );
+            info!("Test already in-flight, rejecting connection from {peer_string}");
             let _ = server_write_error(&mut inbound, ServerError::PerfTestAlreadyInFlight).await;
         }
     } else {
         // We already have a test in-flight, close the connection immediately.
         // Note that here we don't read anything from the socket to avoid
         // unnecessarily being blocked on the client not sending any data.
-        info!(
-            "Test already in-flight, rejecting connection from {}",
-            peer_string
-        );
+        info!("Test already in-flight, rejecting connection from {peer_string}");
         let _ = server_write_error(&mut inbound, ServerError::PerfTestAlreadyInFlight).await;
     }
     Ok(())

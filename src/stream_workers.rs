@@ -87,7 +87,7 @@ impl StreamWorker {
         let mut total_retransmits = 0_usize;
         let mut total_cwnd = 0_usize;
 
-        let current_interval_start = Instant::now();
+        let mut current_interval_start = Instant::now();
 
         loop {
             if start_time.elapsed() > timeout_duration {
@@ -176,6 +176,8 @@ impl StreamWorker {
                     .await
                     .map_err(|e| Error::StreamWorkerError(e.into()))?;
                 total_bytes_transferred += bytes_transferred;
+                current_interval_start = now;
+                bytes_transferred = 0;
                 index += 1;
             }
         }
@@ -183,13 +185,11 @@ impl StreamWorker {
         // Drain the sockets if we are receiving end, we need to do that to avoid failing the
         // sender stream that might still be sending data.
         if !self.is_sending {
-            while self
-                .stream
-                .read(&mut buffer)
-                .await
-                .map_err(|e| Error::StreamWorkerError(e.into()))?
-                != 0
-            {}
+            let mut stream = self.stream;
+
+            tokio::spawn(
+                async move { while stream.read(&mut buffer).await.is_ok_and(|v| v > 0) {} },
+            );
         }
 
         Ok(StreamStats {
@@ -213,7 +213,7 @@ impl StreamWorker {
 
         if let Some(socket_buffers) = self.params.socket_buffers {
             let socket_buffers = socket_buffers.try_into().unwrap_or(u32::MAX);
-            debug!("Setting socket buffer size to {}", socket_buffers);
+            debug!("Setting socket buffer size to {socket_buffers}");
 
             unsafe {
                 #[cfg(unix)]

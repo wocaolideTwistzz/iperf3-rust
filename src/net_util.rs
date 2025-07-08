@@ -127,8 +127,7 @@ where
         remaining_bytes -= bytes_read as u64;
     }
     debug!(
-        "Received a control message ({} bytes) in {} iterations",
-        message_size, counter
+        "Received a control message ({message_size} bytes) in {counter} iterations"
     );
     assert_eq!(message_size as usize, buf.len());
 
@@ -160,7 +159,7 @@ impl TcpStreamExt for TcpStream {
 
 pub fn new_socket(bind_addr: Option<String>, prefer_ipv6: bool) -> Result<TcpSocket> {
     let socket_addr: SocketAddr = match bind_addr {
-        Some(addr) => format!("{}:0", addr).parse()?,
+        Some(addr) => format!("{addr}:0").parse()?,
         None => {
             if prefer_ipv6 {
                 SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
